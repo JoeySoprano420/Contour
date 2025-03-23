@@ -1,21 +1,158 @@
 Syntax Construct
 Binary (Machine Code)
 Description
-let x = 10;
-MOV [0x1000], 10
-Declare variable x and assign value 10
-let y = x + 5;
-MOV R1, [0x1000]; ADD R1, 5; MOV [0x1001], R1
-Load x into register, add 5, store in y
-if x > 5 { ... }
-CMP [0x1000], 5; JG TargetLabel; NOP
-Compare x with 5, jump to target if true
-for i in 0..10 { ... }
-MOV R1, 0; LoopStart: CMP R1, 10; JG LoopEnd; ...; INC R1; JMP LoopStart; LoopEnd:
-Loop with counter i incrementing from 0 to 10
+if (a < b) { ... }
+CMP [0x1000], [0x1001]; JL BlockStart; NOP; BlockStart: ...
+Compare a and b. Jump to block if condition is true.
+else { ... }
+JMP ElseBlock; ElseBlock: ...
+Jump to the else block when the if condition is false.
+if-else ladder
+CMP [0x1000], 5; JE Block1; CMP [0x1000], 10; JE Block2; JMP Default;
+Multi-condition handling.
+while (x != 0)
+LoopStart: CMP [0x1000], 0; JE LoopEnd; ...; JMP LoopStart; LoopEnd:
+Loop that continues while x is not 0.
+break;
+JMP LoopEnd;
+Exit from a loop and jump to the loop’s ending label.
+continue;
+JMP LoopStart;
+Skip remaining loop body and jump to the loop’s beginning.
+do { ... } while (condition);
+LoopStart: ...; CMP [0x1000], [0x1001]; JE LoopStart;
+Execute the loop body at least once, and then check the condition at the end.
+for (int i = 0; i < 5; i++)
+MOV R1, 0; LoopStart: CMP R1, 5; JGE LoopEnd; ...; INC R1; JMP LoopStart; LoopEnd:
+Implement a counter-based loop iterating from 0 to 4.
+
+Syntax Construct
+Binary (Machine Code)
+Description
+if (a < b) { ... }
+CMP [0x1000], [0x1001]; JL BlockStart; NOP; BlockStart: ...
+Compare a and b. Jump to block if condition is true.
+else { ... }
+JMP ElseBlock; ElseBlock: ...
+Jump to the else block when the if condition is false.
+if-else ladder
+CMP [0x1000], 5; JE Block1; CMP [0x1000], 10; JE Block2; JMP Default;
+Multi-condition handling.
+while (x != 0)
+LoopStart: CMP [0x1000], 0; JE LoopEnd; ...; JMP LoopStart; LoopEnd:
+Loop that continues while x is not 0.
+break;
+JMP LoopEnd;
+Exit from a loop and jump to the loop’s ending label.
+continue;
+JMP LoopStart;
+Skip remaining loop body and jump to the loop’s beginning.
+do { ... } while (condition);
+LoopStart: ...; CMP [0x1000], [0x1001]; JE LoopStart;
+Execute the loop body at least once, and then check the condition at the end.
+for (int i = 0; i < 5; i++)
+MOV R1, 0; LoopStart: CMP R1, 5; JGE LoopEnd; ...; INC R1; JMP LoopStart; LoopEnd:
+Implement a counter-based loop iterating from 0 to 4.
+
+Syntax Construct
+Binary (Machine Code)
+Description
+let a = b + c;
+MOV R1, [0x1001]; MOV R2, [0x1002]; ADD R1, R2; MOV [0x1000], R1;
+Load b and c into registers, add, and store in a.
+a += 10;
+ADD [0x1000], 10;
+Increment a by 10.
+a -= 1;
+DEC [0x1000];
+Decrement a by 1.
+a *= 2;
+SHL [0x1000], 1;
+Multiply a by 2 using left bit shift.
+a /= 2;
+SHR [0x1000], 1;
+Divide a by 2 using right bit shift.
+a %= 5;
+MOV R1, [0x1000]; MOV R2, 5; DIV R1, R2; MOV [0x1000], R2;
+Calculate the remainder of a / 5 and store it in a.
+swap(a, b);
+MOV R1, [0x1000]; MOV R2, [0x1001]; MOV [0x1000], R2; MOV [0x1001], R1;
+Swap the values of a and b.
+a &= 0x0F;
+AND [0x1000], 0x0F;
+Perform bitwise AND on a with hexadecimal mask 0x0F.
+a ^= 0x01;
+XOR [0x1000], 0x01;
+Perform bitwise XOR on a with 0x01.
+`a
+= 0x10;`
+OR [0x1000], 0x10;
+
+Syntax Construct
+Binary (Machine Code)
+Description
 def add(a, b) { return a + b; }
-CALL add; MOV result, R1;
-Function add with parameters and return
+PUSH R1; PUSH R2; MOV R1, [a]; MOV R2, [b]; ADD R1, R2; MOV [result], R1; POP R2; POP R1; RET
+Define a function add that returns the sum of two numbers.
+return value;
+MOV R1, [value]; RET;
+Return value from a function and jump to the return address.
+void printHello()
+PUSH R1; MOV R1, "Hello"; SYSCALL PRINT; POP R1; RET;
+Define a void function to print “Hello” to the console.
+call add(3, 4);
+PUSH 3; PUSH 4; CALL add;
+Call the add function with parameters 3 and 4.
+
+Syntax Construct
+Binary (Machine Code)
+Description
+let *ptr = &x;
+LEA R1, [0x1000]; MOV [ptr], R1;
+Store the address of x in ptr.
+let y = *ptr;
+MOV R1, [ptr]; MOV [y], [R1];
+Dereference ptr to load the value of x into y.
+malloc(256);
+MOV R1, 256; SYSCALL MALLOC; MOV [allocatedMemory], R1;
+Allocate 256 bytes of memory and store the pointer.
+free(ptr);
+MOV R1, [ptr]; SYSCALL FREE;
+Free previously allocated memory at pointer ptr.
+
+Syntax Construct
+Binary (Machine Code)
+Description
 async fetchData(url);
-CREATE THREAD fetchData(url); WAIT THREAD fetchData; MOV result, fetchedData;
-Asynchronous operation to fetch data
+CREATE THREAD fetchData(url); WAIT THREAD fetchData;
+Create a thread to asynchronously fetch data and wait for completion.
+lock(mutex);
+MOV R1, mutex; SYSCALL LOCK;
+Lock a mutex for thread synchronization.
+unlock(mutex);
+MOV R1, mutex; SYSCALL UNLOCK;
+Unlock the previously locked mutex.
+
+Syntax Construct
+Binary (Machine Code)
+Description
+try { ... } catch { ... }
+PUSH ExceptionHandler; ...; POP ExceptionHandler; JMP CatchBlock;
+Setup exception handling, jump to the catch block on error.
+throw Exception;
+MOV R1, Exception; SYSCALL THROW;
+Throw an exception.
+
+Syntax Construct
+Binary (Machine Code)
+Description
+readFile("file.txt");
+MOV R1, "file.txt"; SYSCALL READFILE; MOV [buffer], R1;
+Read the contents of a file into a buffer.
+writeFile("file.txt", data);
+MOV R1, "file.txt"; MOV R2, [data]; SYSCALL WRITEFILE;
+Write data to a file.
+console.log("Message");
+MOV R1, "Message"; SYSCALL PRINT;
+Print a message to the console.
+
