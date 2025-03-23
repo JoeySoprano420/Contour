@@ -1,0 +1,21 @@
+Syntax Construct
+Binary (Machine Code)
+Description
+let x = 10;
+MOV [0x1000], 10
+Declare variable x and assign value 10
+let y = x + 5;
+MOV R1, [0x1000]; ADD R1, 5; MOV [0x1001], R1
+Load x into register, add 5, store in y
+if x > 5 { ... }
+CMP [0x1000], 5; JG TargetLabel; NOP
+Compare x with 5, jump to target if true
+for i in 0..10 { ... }
+MOV R1, 0; LoopStart: CMP R1, 10; JG LoopEnd; ...; INC R1; JMP LoopStart; LoopEnd:
+Loop with counter i incrementing from 0 to 10
+def add(a, b) { return a + b; }
+CALL add; MOV result, R1;
+Function add with parameters and return
+async fetchData(url);
+CREATE THREAD fetchData(url); WAIT THREAD fetchData; MOV result, fetchedData;
+Asynchronous operation to fetch data
