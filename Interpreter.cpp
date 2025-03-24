@@ -1332,3 +1332,112 @@ int main() {
     garbage_collect(); // Cleanup
     return 0;
 }
+
+void check_valid_opcode(uint8_t opcode) {
+    if (opcode_lookup.find(std::to_string(opcode)) == opcode_lookup.end()) {
+        throw std::runtime_error("Error: Unknown opcode encountered - 0x" + std::to_string(opcode));
+    }
+}
+
+void check_memory_bounds(size_t index) {
+    if (index >= memory.size()) {
+        throw std::out_of_range("Error: Memory access out of bounds!");
+    }
+}
+
+void allocate_variable(const std::string &var, int64_t value) {
+    if (reference_table.find(var) == reference_table.end()) {
+        reference_table[var] = memory_index++;
+    }
+    check_memory_bounds(reference_table[var]);
+    memory[reference_table[var]] = value;
+    
+    // Additional memory management steps
+    // This could include dynamically resizing memory or implementing garbage collection
+}
+
+void execute_command(const std::string& command, int64_t operand1, int64_t operand2) {
+    if (opcode_lookup.find(command) != opcode_lookup.end()) {
+        std::cout << "Command: " << command << " executed with operands: "
+                  << operand1 << ", " << operand2 << "\n";
+    } else {
+        std::cerr << "Unknown command: " << command << std::endl;
+    }
+}
+
+void repl() {
+    std::string input;
+    std::cout << "REPL Mode - Type 'exit' to quit.\n";
+    while (true) {
+        std::cout << ">> ";
+        std::getline(std::cin, input);
+        if (input == "exit") break;
+
+        std::istringstream iss(input);
+        std::string command;
+        int64_t operand1, operand2;
+        iss >> command >> operand1 >> operand2;
+        execute_command(command, operand1, operand2);
+    }
+}
+
+/**
+ * Load JSON data from a file.
+ * 
+ * @param file_name The name of the file to load JSON data from.
+ * @return The loaded JSON data.
+ * @throws std::runtime_error if the file cannot be opened.
+ */
+json load_json(const std::string &file_name) {
+    std::ifstream file(file_name);
+    json data;
+    if (!file) {
+        throw std::runtime_error("Error: Could not open " + file_name);
+    }
+    file >> data;
+    return data;
+}
+
+void load_binary_program(const std::string &file_name) {
+    std::ifstream file(file_name);
+    if (!file) {
+        throw std::runtime_error("Error: Could not open binary program file.");
+    }
+
+    int64_t opcode;
+    binary_program.reserve(256); // Reserve memory to avoid frequent reallocations
+    while (file >> opcode) {
+        std::vector<int64_t> instruction;
+        instruction.reserve(4); // Reserve space for opcode and three parameters
+        instruction.push_back(opcode);
+
+        // Assume each instruction has fixed parameters for simplicity
+        for (int i = 0; i < 3; ++i) {
+            int64_t param;
+            file >> param;
+            instruction.push_back(param);
+        }
+        binary_program.push_back(instruction);
+    }
+}
+
+#include <cassert>
+
+void test_load_json() {
+    json data = load_json("test.json");
+    assert(data.is_object());
+    assert(data["key"] == "value");
+}
+
+void test_opcode_lookup() {
+    initialize_opcode_lookup();
+    assert(opcode_lookup["LET"] == 0x10);
+}
+
+int main() {
+    test_load_json();
+    test_opcode_lookup();
+    std::cout << "All tests passed!" << std::endl;
+    return 0;
+}
+
