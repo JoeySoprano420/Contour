@@ -218,3 +218,1117 @@ int main() {
 
     return 0;
 }
+
+#include <iostream>
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <stack>
+#include <sstream>
+#include <stdexcept>
+#include <map>
+
+using namespace std;
+
+// Opcode Lookup Table (updated with new opcodes for loop structures)
+unordered_map<string, uint8_t> opcode_lookup = {
+    {"LET", 0x10}, {"ADD", 0x20}, {"SUBTRACT", 0x21}, {"MULTIPLY", 0x22}, {"DIVIDE", 0x23},
+    {"MODULO", 0x24}, {"AND", 0x25}, {"OR", 0x26}, {"NOT", 0x27},
+    {"IF", 0x30}, {"ELSE", 0x31}, {"JUMP", 0x32}, {"LOOP", 0x33},
+    {"FUNC", 0x50}, {"CALL", 0x51}, {"RETURN", 0x52},
+    {"BREAK", 0x34}, {"CONTINUE", 0x35}, {"PRINT", 0x40},
+    {"WHILE", 0x60}, {"FOR", 0x61}
+};
+
+// Memory and Stack
+vector<int64_t> global_memory(256, 0);  // Global memory
+stack<unordered_map<string, int64_t>> local_stack;  // Stack for function calls and local variables
+
+int max_recursion_depth = 50;  // Set max recursion depth
+int current_recursion_depth = 0;  // Track the recursion depth
+
+// Function Table: Maps function names to their AST representations
+unordered_map<string, struct ASTNode*> function_table;
+
+// Error handling utility
+void throw_error(const string& msg) {
+    throw runtime_error("Error: " + msg);
+}
+
+// Check memory bounds
+void check_memory_bounds(size_t index) {
+    if (index >= global_memory.size()) throw_error("Memory access out of bounds.");
+}
+
+// AST Node class with enhanced function-related fields
+class ASTNode {
+public:
+    string command;
+    int64_t value;               // For constants and loop counters
+    vector<ASTNode*> children;   // Nested commands
+    string function_name;        // For function nodes
+    vector<int64_t> function_args;  // Function arguments
+    ASTNode* condition;          // For conditional expressions in loops and if-else statements
+
+    ASTNode(const string& cmd, int64_t val = 0) : command(cmd), value(val), condition(nullptr) {}
+    ~ASTNode() {
+        for (ASTNode* child : children) delete child;
+        if (condition) delete condition;
+    }
+};
+
+// Parse expressions into AST, including functions and control structures
+ASTNode* parse_expression(stringstream& ss) {
+    string cmd;
+    ss >> cmd;
+
+    ASTNode* root = new ASTNode(cmd);
+
+    if (cmd == "FUNC") {
+        ss >> root->function_name;  // Function name
+        string param;
+        while (ss >> param && param != "{") {
+            root->function_args.push_back(stoi(param));  // Collect arguments
+        }
+        string block;
+        while (getline(ss, block, ';')) {
+            if (block == "END") break;  // End function definition
+            stringstream block_stream(block);
+            root->children.push_back(parse_expression(block_stream));
+        }
+        function_table[root->function_name] = root;  // Store function in table
+    } else if (cmd == "CALL") {
+        ss >> root->function_name;  // Function name to call
+        int64_t arg;
+        while (ss >> arg) root->function_args.push_back(arg);  // Collect arguments
+    } else if (cmd == "RETURN") {
+        ss >> root->value;  // Return value
+    } else if (cmd == "WHILE") {
+        // Parse the condition and body for the while loop
+        root->condition = parse_expression(ss);
+        string body;
+        while (getline(ss, body, ';')) {
+            if (body == "END") break;  // End of loop
+            stringstream body_stream(body);
+            root->children.push_back(parse_expression(body_stream));
+        }
+    } else if (cmd == "FOR") {
+        // Parse the loop parameters (e.g., start, end, increment) and body
+        int64_t start, end, increment;
+        ss >> start >> end >> increment;
+        root->value = start;
+        root->children.push_back(parse_expression(ss));  // Parse loop body
+        root->condition = new ASTNode("CONDITION", end);  // Store the loop end condition
+    } else {
+        int64_t param;
+        while (ss >> param) root->children.push_back(new ASTNode("", param));
+    }
+    return root;
+}
+
+// Execute AST recursively with function handling, recursion detection, and stack-based memory
+void execute_ast(ASTNode* root) {
+    if (!root) return;
+
+    try {
+        if (root->command == "LET") {
+            local_stack.top()[to_string(root->children[0]->value)] = root->children[1]->value;
+        } else if (root->command == "ADD") {
+            int64_t result = local_stack.top()[to_string(root->children[0]->value)] +
+                             local_stack.top()[to_string(root->children[1]->value)];
+            local_stack.top()[to_string(root->children[2]->value)] = result;
+        } else if (root->command == "CALL") {
+            if (function_table.find(root->function_name) == function_table.end())
+                throw_error("Undefined function: " + root->function_name);
+
+            // Recursion depth check
+            if (current_recursion_depth >= max_recursion_depth)
+                throw_error("Stack overflow due to too many recursive calls.");
+
+            // Increase recursion depth
+            current_recursion_depth++;
+
+            // Create a new stack frame for the function call
+            unordered_map<string, int64_t> new_frame;
+            ASTNode* func = function_table[root->function_name];
+
+            // Bind arguments to function parameters
+            for (size_t i = 0; i < func->function_args.size(); ++i) {
+                new_frame[to_string(func->function_args[i])] = root->function_args[i];
+            }
+            local_stack.push(new_frame);
+
+            // Execute function body
+            for (ASTNode* child : func->children) execute_ast(child);
+            local_stack.pop();  // Remove stack frame after function execution
+
+            // Decrease recursion depth
+            current_recursion_depth--;
+        } else if (root->command == "RETURN") {
+            // Handle return value
+            local_stack.top()[to_string(root->value)] = root->value;
+        } else if (root->command == "WHILE") {
+            // Execute while loop until condition is false
+            while (local_stack.top()[to_string(root->condition->value)] != 0) {
+                for (ASTNode* child : root->children) {
+                    execute_ast(child);
+                }
+            }
+        } else if (root->command == "FOR") {
+            // Execute for loop (start -> end -> increment)
+            for (int64_t i = root->value; i <= root->condition->value; i++) {
+                local_stack.top()[to_string(i)] = i;  // Set loop counter
+                for (ASTNode* child : root->children) {
+                    execute_ast(child);
+                }
+            }
+        } else if (root->command == "PRINT") {
+            cout << "Output: " << local_stack.top()[to_string(root->children[0]->value)] << endl;
+        } else {
+            cerr << "Unknown command: " << root->command << endl;
+        }
+    } catch (const runtime_error& e) {
+        cerr << e.what() << endl;
+    }
+}
+
+// REPL for user interaction
+void repl() {
+    cout << "Extended REPL with Function Calls, Loops, and Error Handling (Type 'exit' to quit)\n";
+
+    string input;
+    while (true) {
+        cout << ">> ";
+        getline(cin, input);
+
+        if (input == "exit") break;
+
+        stringstream ss(input);
+        ASTNode* ast = parse_expression(ss);
+        execute_ast(ast);
+        delete ast;
+    }
+}
+
+int main() {
+    cout << "Extended Virtual Machine with Functions, Loops, and Stack Overflow Prevention...\n";
+
+    // Example hard-coded program with function definitions and loops
+    cout << "Executing hard-coded function call test:\n";
+    stringstream sample_code;
+    sample_code << "FUNC factorial 0 { IF 0; RETURN 1; END; CALL factorial 0; MULTIPLY 0 0 0; } ";
+    sample_code << "CALL factorial 5;";  // Call function 'factorial'
+
+    ASTNode* root = parse_expression(sample_code);
+    execute_ast(root);
+    delete root;
+
+    // Start REPL
+    repl();
+
+    return 0;
+}
+
+// New opcode entries
+opcode_lookup["MALLOC"] = 0x70;
+opcode_lookup["FREE"] = 0x71;
+
+// Example function for dynamic memory allocation and use
+void malloc_example() {
+    int* array = malloc(sizeof(int) * 100);  // Allocate space for an array of 100 integers
+    for (int i = 0; i < 100; ++i) {
+        array[i] = i * 10;  // Assign values
+    }
+    free(array);  // Deallocate memory when done
+}
+
+void repl() {
+    cout << "Extended REPL with Function Calls, Loops, and Error Handling (Type 'exit' to quit)\n";
+    string input;
+
+    while (true) {
+        cout << ">> ";
+        getline(cin, input);
+
+        if (input == "exit") break;
+
+        try {
+            stringstream ss(input);
+            ASTNode* ast = parse_expression(ss);
+            execute_ast(ast);
+            delete ast;
+        } catch (const runtime_error& e) {
+            cout << "Error: " << e.what() << endl;
+        }
+    }
+}
+
+// Example function listing command
+void list_functions() {
+    cout << "Defined functions: \n";
+    for (const auto& entry : function_table) {
+        cout << "Function: " << entry.first << "\n";
+    }
+}
+
+class GCObject {
+public:
+    int ref_count = 0;  // Reference count
+
+    void add_ref() { ref_count++; }
+    void release() {
+        ref_count--;
+        if (ref_count == 0) {
+            delete this;
+        }
+    }
+};
+
+// Implementing automatic garbage collection for allocated objects
+void gc_collect() {
+    // This is a simplified version. The actual GC process can be more complex.
+    for (auto& obj : allocated_objects) {
+        if (obj->ref_count == 0) {
+            delete obj;
+            allocated_objects.remove(obj);
+        }
+    }
+}
+
+// SWITCH/CASE opcode implementation
+unordered_map<string, uint8_t> opcode_lookup = {
+    // other opcodes...
+    {"SWITCH", 0x80},
+    {"CASE", 0x81},
+    {"DEFAULT", 0x82},
+};
+
+void execute_switch_case(ASTNode* root) {
+    // Switch statement evaluation
+    int64_t switch_value = local_stack.top()[to_string(root->value)];
+    for (ASTNode* child : root->children) {
+        if (child->command == "CASE" && child->value == switch_value) {
+            execute_ast(child);  // Execute corresponding case block
+            break;
+        }
+    }
+}
+
+// Serialize program state to a file
+void save_program_state(const string& filename) {
+    ofstream out(filename, ios::binary);
+    // Serialize the function table and memory state
+    out.write(reinterpret_cast<char*>(&function_table), sizeof(function_table));
+    out.close();
+}
+
+// Deserialize program state from a file
+void load_program_state(const string& filename) {
+    ifstream in(filename, ios::binary);
+    // Deserialize the function table and memory state
+    in.read(reinterpret_cast<char*>(&function_table), sizeof(function_table));
+    in.close();
+}
+
+// Example: Adding Switch and Case operations in opcode table
+opcode_lookup["SWITCH"] = 0x80;
+opcode_lookup["CASE"] = 0x81;
+opcode_lookup["DEFAULT"] = 0x82;
+
+// Add Switch/Case handling in execution
+void execute_switch_case(ASTNode* root) {
+    if (!root || root->command != "SWITCH") return;
+    
+    int64_t switch_value = local_stack.top()[to_string(root->children[0]->value)];
+    bool matched = false;
+
+    // Traverse through case nodes
+    for (ASTNode* child : root->children) {
+        if (child->command == "CASE") {
+            int64_t case_value = child->value;
+            if (switch_value == case_value) {
+                matched = true;
+                for (ASTNode* case_child : child->children) {
+                    execute_ast(case_child);  // Execute the matched case body
+                }
+            }
+        } else if (child->command == "DEFAULT" && !matched) {
+            for (ASTNode* default_child : child->children) {
+                execute_ast(default_child);  // Execute the default body if no case matched
+            }
+        }
+    }
+}
+
+#include <list>
+
+// List of allocated objects
+list<GCObject*> allocated_objects;
+
+// Implementing automatic garbage collection for allocated objects
+void gc_collect() {
+    // Check reference count of all allocated objects and delete if ref_count == 0
+    for (auto it = allocated_objects.begin(); it != allocated_objects.end(); ) {
+        if ((*it)->ref_count == 0) {
+            delete *it;
+            it = allocated_objects.erase(it);  // Remove from list and continue
+        } else {
+            ++it;
+        }
+    }
+}
+
+class GCObject {
+public:
+    int ref_count = 0;  // Reference count
+
+    // Increase reference count
+    void add_ref() { 
+        ref_count++; 
+    }
+
+    // Decrease reference count and delete if zero
+    void release() { 
+        ref_count--; 
+        if (ref_count == 0) {
+            delete this;
+        }
+    }
+
+    // Static function to track allocated objects
+    static void track(GCObject* obj) {
+        allocated_objects.push_back(obj);
+        obj->add_ref();  // Start tracking the object
+    }
+};
+
+// Updated opcode for SWITCH/CASE handling
+unordered_map<string, uint8_t> opcode_lookup = {
+    // other opcodes...
+    {"SWITCH", 0x80},
+    {"CASE", 0x81},
+    {"DEFAULT", 0x82}
+};
+
+// Parse the SWITCH/CASE block
+ASTNode* parse_switch_case_block(stringstream& ss) {
+    string cmd;
+    ss >> cmd;
+
+    if (cmd == "SWITCH") {
+        ASTNode* switch_node = new ASTNode("SWITCH");
+        int64_t value;
+        ss >> value;  // The value to compare against
+
+        while (true) {
+            ss >> cmd;
+            if (cmd == "CASE") {
+                int64_t case_value;
+                ss >> case_value;
+                ASTNode* case_node = new ASTNode("CASE", case_value);
+                string body;
+                while (getline(ss, body, ';')) {
+                    if (body == "END") break;  // End of the case block
+                    stringstream body_stream(body);
+                    case_node->children.push_back(parse_expression(body_stream));
+                }
+                switch_node->children.push_back(case_node);
+            } else if (cmd == "DEFAULT") {
+                ASTNode* default_node = new ASTNode("DEFAULT");
+                string body;
+                while (getline(ss, body, ';')) {
+                    if (body == "END") break;  // End of the default block
+                    stringstream body_stream(body);
+                    default_node->children.push_back(parse_expression(body_stream));
+                }
+                switch_node->children.push_back(default_node);
+            } else if (cmd == "END") {
+                break;
+            }
+        }
+        return switch_node;
+    }
+
+    return nullptr;
+}
+
+// Execute SWITCH/CASE in AST
+void execute_switch_case(ASTNode* switch_node) {
+    if (switch_node->command == "SWITCH") {
+        int64_t value_to_check = switch_node->value;
+
+        // Iterate over children (CASE or DEFAULT)
+        for (ASTNode* child : switch_node->children) {
+            if (child->command == "CASE") {
+                if (child->value == value_to_check) {
+                    // Execute the case block
+                    for (ASTNode* case_child : child->children) {
+                        execute_ast(case_child);
+                    }
+                    break;  // Exit after the first matching case
+                }
+            } else if (child->command == "DEFAULT") {
+                // Execute default block if no case matched
+                for (ASTNode* default_child : child->children) {
+                    execute_ast(default_child);
+                }
+                break;  // Default only executes if no case matches
+            }
+        }
+    }
+}
+
+// Execute AST (Updated to handle SWITCH/CASE)
+void execute_ast(ASTNode* root) {
+    if (!root) return;
+
+    try {
+        if (root->command == "SWITCH") {
+            execute_switch_case(root);
+        } else if (root->command == "LET") {
+            local_stack.top()[to_string(root->children[0]->value)] = root->children[1]->value;
+        } else if (root->command == "ADD") {
+            int64_t result = local_stack.top()[to_string(root->children[0]->value)] +
+                             local_stack.top()[to_string(root->children[1]->value)];
+            local_stack.top()[to_string(root->children[2]->value)] = result;
+        } else if (root->command == "CALL") {
+            if (function_table.find(root->function_name) == function_table.end())
+                throw_error("Undefined function: " + root->function_name);
+
+            if (current_recursion_depth >= max_recursion_depth)
+                throw_error("Stack overflow due to too many recursive calls.");
+
+            current_recursion_depth++;
+
+            unordered_map<string, int64_t> new_frame;
+            ASTNode* func = function_table[root->function_name];
+
+            for (size_t i = 0; i < func->function_args.size(); ++i) {
+                new_frame[to_string(func->function_args[i])] = root->function_args[i];
+            }
+            local_stack.push(new_frame);
+
+            for (ASTNode* child : func->children) execute_ast(child);
+            local_stack.pop();
+
+            current_recursion_depth--;
+        } else if (root->command == "PRINT") {
+            cout << "Output: " << local_stack.top()[to_string(root->children[0]->value)] << endl;
+        } else {
+            cerr << "Unknown command: " << root->command << endl;
+        }
+    } catch (const runtime_error& e) {
+        cerr << e.what() << endl;
+    }
+}
+
+class GCObject {
+public:
+    int ref_count = 0;
+
+    void add_ref() { ref_count++; }
+    void release() {
+        ref_count--;
+        if (ref_count == 0) {
+            delete this;
+        }
+    }
+};
+
+// Sample dynamic memory allocation and deallocation
+void malloc_example() {
+    int* array = (int*)malloc(sizeof(int) * 100);  // Allocate space for an array of 100 integers
+    for (int i = 0; i < 100; ++i) {
+        array[i] = i * 10;  // Assign values
+    }
+    free(array);  // Deallocate memory when done
+}
+
+// Add GC collection (simplified)
+void gc_collect() {
+    for (auto& obj : allocated_objects) {
+        if (obj->ref_count == 0) {
+            delete obj;
+            allocated_objects.remove(obj);
+        }
+    }
+}
+
+•	Implement more advanced memory management techniques such as generational garbage collection.
+	•	Enhance loop and conditional handling to support a wider range of control structures.
+
+void execute_switch_case(ASTNode* root) {
+    if (root->command != "SWITCH") return;
+
+    // Assuming the first child is the expression being evaluated (condition for SWITCH)
+    int64_t condition_value = local_stack.top()[to_string(root->children[0]->value)];
+    
+    // Iterate over the CASE nodes
+    for (ASTNode* case_node : root->children) {
+        if (case_node->command == "CASE") {
+            int64_t case_value = case_node->value;
+            if (condition_value == case_value) {
+                // Execute the case block if the value matches
+                for (ASTNode* case_child : case_node->children) {
+                    execute_ast(case_child);
+                }
+                break;
+            }
+        }
+    }
+}
+
+void execute_ast(ASTNode* root) {
+    if (!root) return;
+
+    try {
+        if (root->command == "LET") {
+            // Handle LET command
+        } else if (root->command == "ADD") {
+            // Handle ADD command
+        } else if (root->command == "SWITCH") {
+            execute_switch_case(root);  // Handle SWITCH/CASE command
+        } else {
+            // Other commands
+        }
+    } catch (const runtime_error& e) {
+        cerr << e.what() << endl;
+    }
+}
+
+class GCObject {
+public:
+    int ref_count;
+
+    GCObject() : ref_count(0) {}
+
+    void retain() {
+        ref_count++;
+    }
+
+    void release() {
+        ref_count--;
+        if (ref_count == 0) {
+            // Perform cleanup or delete object
+            delete this;
+        }
+    }
+};
+
+void gc_collect(std::vector<GCObject*>& allocated_objects) {
+    for (auto it = allocated_objects.begin(); it != allocated_objects.end();) {
+        if ((*it)->ref_count == 0) {
+            delete *it;
+            it = allocated_objects.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void* vm_malloc(size_t size) {
+    void* ptr = malloc(size);
+    GCObject* obj = new GCObject();
+    memory_map[static_cast<int*>(ptr)] = obj;
+    return ptr;
+}
+
+void vm_free(void* ptr) {
+    auto it = memory_map.find(static_cast<int*>(ptr));
+    if (it != memory_map.end()) {
+        it->second->release();
+        memory_map.erase(it);
+        free(ptr);
+    }
+}
+
+void* vm_malloc(size_t size) {
+    void* ptr = malloc(size);
+    GCObject* obj = new GCObject();
+    memory_map[static_cast<int*>(ptr)] = obj;
+    return ptr;
+}
+
+void vm_free(void* ptr) {
+    auto it = memory_map.find(static_cast<int*>(ptr));
+    if (it != memory_map.end()) {
+        it->second->release();
+        memory_map.erase(it);
+        free(ptr);
+    }
+}
+
+void call_function(const std::string& function_name, int arg) {
+    Function* func = function_table[function_name];
+    // Set up the arguments, execute the function, and handle recursion or depth checks.
+}
+
+bool is_valid_command(const std::string& command) {
+    // Validate the command structure and arguments
+    if (command.empty() || command[0] != 'C') {
+        return false;  // Example error check
+    }
+    return true;
+}
+
+void parse_command(const std::string& input) {
+    if (!is_valid_command(input)) {
+        std::cerr << "Error: Invalid command syntax!" << std::endl;
+        return;
+    }
+    // Proceed with normal parsing
+}
+
+// Handle SWITCH/CASE logic
+else if (root->command == "SWITCH") {
+    int64_t switch_value = local_stack.top()[to_string(root->children[0]->value)];
+    bool case_matched = false;
+    for (size_t i = 1; i < root->children.size(); i++) {
+        if (root->children[i]->command == "CASE") {
+            int64_t case_value = root->children[i]->value;
+            if (switch_value == case_value) {
+                case_matched = true;
+            }
+        } else if (root->children[i]->command == "DEFAULT" && !case_matched) {
+            case_matched = true; // Execute default if no case matched
+        }
+        if (case_matched) {
+            for (ASTNode* child : root->children[i]->children) {
+                execute_ast(child);
+            }
+        }
+    }
+}
+
+else if (root->command == "MALLOC") {
+    int64_t size = root->children[0]->value;
+    void* ptr = malloc(size);
+    local_stack.top()[to_string(root->children[1]->value)] = (int64_t)ptr;
+} else if (root->command == "FREE") {
+    void* ptr = (void*)local_stack.top()[to_string(root->children[0]->value)];
+    free(ptr);
+}
+
+unordered_set<GCObject*> allocated_objects;
+
+// When allocating a new object:
+GCObject* new_obj = new GCObject();
+allocated_objects.insert(new_obj);
+
+// During garbage collection:
+void gc_collect() {
+    for (auto it = allocated_objects.begin(); it != allocated_objects.end();) {
+        if ((*it)->ref_count == 0) {
+            delete *it;
+            it = allocated_objects.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+cout << "Current recursion depth: " << current_recursion_depth << endl;
+
+void throw_error(const string& msg, const string& location = "Unknown") {
+    throw runtime_error("Error at " + location + ": " + msg);
+}
+
+void memory_status() {
+    cout << "Memory usage:\n";
+    for (size_t i = 0; i < global_memory.size(); ++i) {
+        if (global_memory[i] != 0) {
+            cout << "Memory[" << i << "]: " << global_memory[i] << endl;
+        }
+    }
+}
+
+#include <iostream>
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <stack>
+#include <sstream>
+#include <stdexcept>
+#include <map>
+#include <memory>  // For smart pointers
+
+using namespace std;
+
+// Opcode Lookup Table (updated with new opcodes for loop structures)
+unordered_map<string, uint8_t> opcode_lookup = {
+    {"LET", 0x10}, {"ADD", 0x20}, {"SUBTRACT", 0x21}, {"MULTIPLY", 0x22}, {"DIVIDE", 0x23},
+    {"MODULO", 0x24}, {"AND", 0x25}, {"OR", 0x26}, {"NOT", 0x27},
+    {"IF", 0x30}, {"ELSE", 0x31}, {"JUMP", 0x32}, {"LOOP", 0x33},
+    {"FUNC", 0x50}, {"CALL", 0x51}, {"RETURN", 0x52},
+    {"BREAK", 0x34}, {"CONTINUE", 0x35}, {"PRINT", 0x40},
+    {"WHILE", 0x60}, {"FOR", 0x61}
+};
+
+// Memory and Stack
+vector<int64_t> global_memory(256, 0);  // Global memory
+stack<unordered_map<string, int64_t>> local_stack;  // Stack for function calls and local variables
+
+int max_recursion_depth = 50;  // Set max recursion depth
+int current_recursion_depth = 0;  // Track the recursion depth
+
+// Function Table: Maps function names to their AST representations
+unordered_map<string, shared_ptr<struct ASTNode>> function_table;
+
+// Error handling utility
+void throw_error(const string& msg, const string& context = "") {
+    if (!context.empty()) {
+        throw runtime_error("Error: " + msg + " Context: " + context);
+    }
+    else {
+        throw runtime_error("Error: " + msg);
+    }
+}
+
+// Check memory bounds
+void check_memory_bounds(size_t index, const string& context) {
+    if (index >= global_memory.size()) throw_error("Memory access out of bounds.", context);
+}
+
+// AST Node class with enhanced function-related fields
+class ASTNode {
+public:
+    string command;
+    int64_t value;               // For constants and loop counters
+    vector<shared_ptr<ASTNode>> children;   // Nested commands
+    string function_name;        // For function nodes
+    vector<int64_t> function_args;  // Function arguments
+    shared_ptr<ASTNode> condition;          // For conditional expressions in loops and if-else statements
+
+    ASTNode(const string& cmd, int64_t val = 0) : command(cmd), value(val), condition(nullptr) {}
+};
+
+// Parse expressions into AST, including functions and control structures
+shared_ptr<ASTNode> parse_expression(stringstream& ss) {
+    string cmd;
+    ss >> cmd;
+
+    auto root = make_shared<ASTNode>(cmd);
+
+    if (cmd == "FUNC") {
+        ss >> root->function_name;  // Function name
+        string param;
+        while (ss >> param && param != "{") {
+            root->function_args.push_back(stoi(param));  // Collect arguments
+        }
+        string block;
+        while (getline(ss, block, ';')) {
+            if (block == "END") break;  // End function definition
+            stringstream block_stream(block);
+            root->children.push_back(parse_expression(block_stream));
+        }
+        function_table[root->function_name] = root;  // Store function in table
+    } else if (cmd == "CALL") {
+        ss >> root->function_name;  // Function name to call
+        int64_t arg;
+        while (ss >> arg) root->function_args.push_back(arg);  // Collect arguments
+    } else if (cmd == "RETURN") {
+        ss >> root->value;  // Return value
+    } else if (cmd == "WHILE") {
+        // Parse the condition and body for the while loop
+        root->condition = parse_expression(ss);
+        string body;
+        while (getline(ss, body, ';')) {
+            if (body == "END") break;  // End of loop
+            stringstream body_stream(body);
+            root->children.push_back(parse_expression(body_stream));
+        }
+    } else if (cmd == "FOR") {
+        // Parse the loop parameters (e.g., start, end, increment) and body
+        int64_t start, end, increment;
+        ss >> start >> end >> increment;
+        root->value = start;
+        root->children.push_back(parse_expression(ss));  // Parse loop body
+        root->condition = make_shared<ASTNode>("CONDITION", end);  // Store the loop end condition
+    } else {
+        int64_t param;
+        while (ss >> param) root->children.push_back(make_shared<ASTNode>("", param));
+    }
+    return root;
+}
+
+// Execute AST recursively with function handling, recursion detection, and stack-based memory
+void execute_ast(shared_ptr<ASTNode> root, const string& context = "") {
+    if (!root) return;
+
+    try {
+        if (root->command == "LET") {
+            local_stack.top()[to_string(root->children[0]->value)] = root->children[1]->value;
+        } else if (root->command == "ADD") {
+            int64_t result = local_stack.top()[to_string(root->children[0]->value)] +
+                             local_stack.top()[to_string(root->children[1]->value)];
+            local_stack.top()[to_string(root->children[2]->value)] = result;
+        } else if (root->command == "CALL") {
+            if (function_table.find(root->function_name) == function_table.end())
+                throw_error("Undefined function: " + root->function_name, context);
+
+            // Recursion depth check
+            if (current_recursion_depth >= max_recursion_depth)
+                throw_error("Stack overflow due to too many recursive calls.", context);
+
+            // Increase recursion depth
+            current_recursion_depth++;
+
+            // Create a new stack frame for the function call
+            unordered_map<string, int64_t> new_frame;
+            auto func = function_table[root->function_name];
+
+            // Bind arguments to function parameters
+            for (size_t i = 0; i < func->function_args.size(); ++i) {
+                new_frame[to_string(func->function_args[i])] = root->function_args[i];
+            }
+            local_stack.push(new_frame);
+
+            // Execute function body
+            for (auto& child : func->children) execute_ast(child, "Inside function " + root->function_name);
+            local_stack.pop();  // Remove stack frame after function execution
+
+            // Decrease recursion depth
+            current_recursion_depth--;
+        } else if (root->command == "RETURN") {
+            // Handle return value
+            local_stack.top()[to_string(root->value)] = root->value;
+        } else if (root->command == "WHILE") {
+            // Execute while loop until condition is false
+            while (local_stack.top()[to_string(root->condition->value)] != 0) {
+                for (auto& child : root->children) {
+                    execute_ast(child, "Inside while loop");
+                }
+            }
+        } else if (root->command == "FOR") {
+            // Execute for loop (start -> end -> increment)
+            for (int64_t i = root->value; i <= root->condition->value; i++) {
+                local_stack.top()[to_string(i)] = i;  // Set loop counter
+                for (auto& child : root->children) {
+                    execute_ast(child, "Inside for loop");
+                }
+            }
+        } else if (root->command == "PRINT") {
+            cout << "Output: " << local_stack.top()[to_string(root->children[0]->value)] << endl;
+        } else {
+            cerr << "Unknown command: " << root->command << endl;
+        }
+    } catch (const runtime_error& e) {
+        cerr << e.what() << endl;
+    }
+}
+
+// REPL for user interaction
+void repl() {
+    cout << "Extended REPL with Function Calls, Loops, and Error Handling (Type 'exit' to quit)\n";
+
+    string input;
+    while (true) {
+        cout << ">> ";
+        getline(cin, input);
+
+        if (input == "exit") break;
+
+        try {
+            stringstream ss(input);
+            auto ast = parse_expression(ss);
+            execute_ast(ast, "Main REPL execution");
+        } catch (const runtime_error& e) {
+            cout << "Error: " << e.what() << endl;
+        }
+    }
+}
+
+// Garbage collection example
+class GCObject {
+public:
+    int ref_count = 0;  // Reference count
+
+    void add_ref() { ref_count++; }
+    void release() {
+        ref_count--;
+        if (ref_count == 0) {
+            cout << "Garbage collecting object\n";
+            delete this;
+        }
+    }
+};
+
+// Main function
+int main() {
+    // Start REPL for testing
+    repl();
+    return 0;
+}
+
+#include <iostream>
+#include <unordered_map>
+#include <vector>
+#include <string>
+#include <stack>
+#include <sstream>
+#include <stdexcept>
+#include <map>
+#include <fstream> // For serialization and deserialization
+#include <set>     // For garbage collection
+
+using namespace std;
+
+// Opcode Lookup Table (Enhanced for SWITCH and dynamic memory)
+unordered_map<string, uint8_t> opcode_lookup = {
+    {"LET", 0x10}, {"ADD", 0x20}, {"PRINT", 0x40}, {"CALL", 0x51}, {"RETURN", 0x52},
+    {"WHILE", 0x60}, {"FOR", 0x61}, {"SWITCH", 0x70}, {"CASE", 0x71}, {"DEFAULT", 0x72},
+    {"MALLOC", 0x80}, {"FREE", 0x81}, {"SAVE", 0x90}, {"LOAD", 0x91}
+};
+
+// Memory Structures
+vector<int64_t> global_memory(256, 0); // Global memory
+unordered_map<size_t, int64_t*> dynamic_memory; // Dynamic memory allocation
+
+stack<unordered_map<string, int64_t>> local_stack; // Local variables
+int max_recursion_depth = 50, current_recursion_depth = 0; // Recursion depth
+
+// Garbage Collection Tracking
+set<int64_t*> memory_references; // Track allocated dynamic memory
+
+// Function Table
+unordered_map<string, struct ASTNode*> function_table;
+
+void throw_error(const string& msg) {
+    throw runtime_error("Error: " + msg);
+}
+
+// AST Node Class
+class ASTNode {
+public:
+    string command;
+    int64_t value;
+    vector<ASTNode*> children;
+    ASTNode* condition;
+
+    ASTNode(const string& cmd, int64_t val = 0) : command(cmd), value(val), condition(nullptr) {}
+    ~ASTNode() {
+        for (ASTNode* child : children) delete child;
+        if (condition) delete condition;
+    }
+};
+
+// Serialize AST to file
+void serialize_ast(ASTNode* root, ostream& out) {
+    if (!root) return;
+    out << root->command << " " << root->value << " ";
+    out << root->children.size() << " ";
+    for (ASTNode* child : root->children) {
+        serialize_ast(child, out);
+    }
+}
+
+// Deserialize AST from file
+ASTNode* deserialize_ast(istream& in) {
+    string cmd;
+    int64_t val, num_children;
+    in >> cmd >> val >> num_children;
+    ASTNode* root = new ASTNode(cmd, val);
+    for (size_t i = 0; i < num_children; ++i) {
+        root->children.push_back(deserialize_ast(in));
+    }
+    return root;
+}
+
+// Garbage Collection: Free unused dynamic memory
+void garbage_collect() {
+    cout << "Running garbage collector...\n";
+    for (auto ref : memory_references) {
+        delete ref; // Free memory
+    }
+    memory_references.clear();
+}
+
+// Dynamic Memory Allocation
+int64_t* allocate_dynamic(int64_t size) {
+    int64_t* block = new int64_t[size];
+    memory_references.insert(block);
+    return block;
+}
+
+void free_dynamic(int64_t* block) {
+    if (memory_references.find(block) != memory_references.end()) {
+        delete[] block;
+        memory_references.erase(block);
+    } else {
+        throw_error("Attempted to free unallocated memory.");
+    }
+}
+
+// AST Execution
+void execute_ast(ASTNode* root) {
+    if (!root) return;
+    if (root->command == "LET") {
+        local_stack.top()[to_string(root->children[0]->value)] = root->children[1]->value;
+    } else if (root->command == "ADD") {
+        int64_t result = local_stack.top()[to_string(root->children[0]->value)] +
+                         local_stack.top()[to_string(root->children[1]->value)];
+        local_stack.top()[to_string(root->children[2]->value)] = result;
+    } else if (root->command == "MALLOC") {
+        int64_t size = root->children[0]->value;
+        int64_t* block = allocate_dynamic(size);
+        local_stack.top()[to_string(root->children[1]->value)] = reinterpret_cast<int64_t>(block);
+    } else if (root->command == "FREE") {
+        int64_t* block = reinterpret_cast<int64_t*>(local_stack.top()[to_string(root->children[0]->value)]);
+        free_dynamic(block);
+    } else if (root->command == "SWITCH") {
+        bool matched = false;
+        for (ASTNode* child : root->children) {
+            if (child->command == "CASE" &&
+                local_stack.top()[to_string(root->value)] == child->value) {
+                execute_ast(child);
+                matched = true;
+                break;
+            }
+        }
+        if (!matched) {
+            for (ASTNode* child : root->children) {
+                if (child->command == "DEFAULT") {
+                    execute_ast(child);
+                }
+            }
+        }
+    } else if (root->command == "PRINT") {
+        cout << "Output: " << local_stack.top()[to_string(root->children[0]->value)] << endl;
+    }
+}
+
+// Enhanced REPL
+void repl() {
+    cout << "REPL with serialization, memory handling, and garbage collection. Type 'exit' to quit.\n";
+
+    string input;
+    while (true) {
+        cout << ">> ";
+        getline(cin, input);
+        if (input == "exit") break;
+
+        stringstream ss(input);
+        if (input.substr(0, 4) == "SAVE") {
+            ofstream out("program.sav");
+            serialize_ast(function_table["main"], out); // Example: Save main function
+            out.close();
+            cout << "Program saved.\n";
+        } else if (input.substr(0, 4) == "LOAD") {
+            ifstream in("program.sav");
+            function_table["main"] = deserialize_ast(in); // Example: Load main function
+            in.close();
+            cout << "Program loaded.\n";
+        } else {
+            ASTNode* ast = deserialize_ast(ss);
+            execute_ast(ast);
+            delete ast;
+        }
+    }
+}
+
+int main() {
+    cout << "Starting enhanced Virtual Machine...\n";
+    repl(); // Launch REPL
+    garbage_collect(); // Cleanup
+    return 0;
+}
